@@ -40,14 +40,38 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+/** Detect macOS (desktop, not iOS). */
+function isMacOS() {
+  // navigator.userAgentData is available in Chrome 90+ but not Firefox
+  if (navigator.userAgentData) {
+    return navigator.userAgentData.platform === 'macOS';
+  }
+  return /Mac/.test(navigator.userAgent) && !/iPhone|iPad|iPod/.test(navigator.userAgent);
+}
+
+/** Convert a Blob to a base64 data URL. */
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 /** Download a blob as a file, waiting for completion before returning. */
 async function downloadBlob(blob, filename) {
-  const blobUrl = URL.createObjectURL(blob);
-  // Always use chrome.downloads.download() so that the extension popup window
-  // is not navigated to the blob URL (which happens with a.click() on macOS).
   if (chrome.downloads) {
+    // On macOS Chrome, chrome.downloads.download() with a blob URL derives the
+    // save-name from the blob's UUID path segment, ignoring the filename parameter.
+    // Using a data URL instead causes Chrome to honour the filename parameter.
+    // On other platforms a blob URL works fine and is cheaper (no base64 encoding).
+    const downloadUrl = isMacOS()
+      ? await blobToDataUrl(blob)
+      : URL.createObjectURL(blob);
+
     // Register listener BEFORE starting download to avoid race where
-    // download completes before listener is attached
+    // download completes before listener is attached.
     let downloadId = null;
     await new Promise((resolve) => {
       const timeout = setTimeout(() => {
@@ -63,11 +87,15 @@ async function downloadBlob(blob, filename) {
         }
       }
       chrome.downloads.onChanged.addListener(listener);
-      chrome.downloads.download({ url: blobUrl, filename, saveAs: false }).then(id => {
+      chrome.downloads.download({ url: downloadUrl, filename, saveAs: false }).then(id => {
         downloadId = id;
       });
     });
+
+    if (!isMacOS()) URL.revokeObjectURL(downloadUrl);
   } else {
+    // Fallback for environments without chrome.downloads (e.g. some Firefox configs).
+    const blobUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = blobUrl;
     a.download = filename;
@@ -75,8 +103,8 @@ async function downloadBlob(blob, filename) {
     a.click();
     a.remove();
     await new Promise(r => setTimeout(r, 5000));
+    URL.revokeObjectURL(blobUrl);
   }
-  URL.revokeObjectURL(blobUrl);
 }
 
 // Track whether we loaded an intercepted file (to clean up on close)
