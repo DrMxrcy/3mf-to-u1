@@ -40,59 +40,21 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-/** Detect macOS (desktop, not iOS). */
-function isMacOS() {
-  // navigator.userAgentData is available in Chrome 90+ but not Firefox
-  if (navigator.userAgentData) {
-    return navigator.userAgentData.platform === 'macOS';
-  }
-  return /Mac/.test(navigator.userAgent) && !/iPhone|iPad|iPod/.test(navigator.userAgent);
-}
-
-/** Convert a Blob to a base64 data URL. */
-function blobToDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
-
-/** Download a blob as a file, waiting for completion before returning. */
+/**
+ * Download a blob as a file.
+ * Stores the blob in IndexedDB then asks the service worker to initiate the
+ * download via a real chrome-extension:// URL.  This ensures the download
+ * appears in the main browser window (not the popup) and that Chrome honours
+ * the filename on every platform — macOS Chrome ignores the filename parameter
+ * when given a blob: or data: URL.
+ * Falls back to an <a> click for environments without chrome.downloads (e.g.
+ * some Firefox configurations).
+ */
 async function downloadBlob(blob, filename) {
   if (chrome.downloads) {
-    // On macOS Chrome, chrome.downloads.download() with a blob URL derives the
-    // save-name from the blob's UUID path segment, ignoring the filename parameter.
-    // Using a data URL instead causes Chrome to honour the filename parameter.
-    // On other platforms a blob URL works fine and is cheaper (no base64 encoding).
-    const downloadUrl = isMacOS()
-      ? await blobToDataUrl(blob)
-      : URL.createObjectURL(blob);
-
-    // Register listener BEFORE starting download to avoid race where
-    // download completes before listener is attached.
-    let downloadId = null;
-    await new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        chrome.downloads.onChanged.removeListener(listener);
-        resolve();
-      }, 60000);
-      function listener(delta) {
-        if (downloadId !== null && delta.id !== downloadId) return;
-        if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted') {
-          clearTimeout(timeout);
-          chrome.downloads.onChanged.removeListener(listener);
-          resolve();
-        }
-      }
-      chrome.downloads.onChanged.addListener(listener);
-      chrome.downloads.download({ url: downloadUrl, filename, saveAs: false }).then(id => {
-        downloadId = id;
-      });
-    });
-
-    if (!isMacOS()) URL.revokeObjectURL(downloadUrl);
+    const arrayBuffer = await blob.arrayBuffer();
+    await self.MWU1.storeConvertedFile(arrayBuffer, filename);
+    await chrome.runtime.sendMessage({ action: 'trigger_download', filename });
   } else {
     // Fallback for environments without chrome.downloads (e.g. some Firefox configs).
     const blobUrl = URL.createObjectURL(blob);

@@ -65,3 +65,42 @@ self.MWU1.clearFile = async function() {
     tx.onerror = () => reject(tx.error);
   });
 };
+
+/** Store converted file so the service worker can serve it for download. */
+self.MWU1.storeConvertedFile = async function(arrayBuffer, filename) {
+  const db = await openDB();
+  const tx = db.transaction(STORE_NAME, 'readwrite');
+  const store = tx.objectStore(STORE_NAME);
+  store.put(arrayBuffer, 'convertedData');
+  store.put(filename, 'convertedFilename');
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+};
+
+/** Load converted file. Returns { arrayBuffer, filename } or null. */
+self.MWU1.loadConvertedFile = async function() {
+  const db = await openDB();
+  const tx = db.transaction(STORE_NAME, 'readonly');
+  const store = tx.objectStore(STORE_NAME);
+  const [data, filename] = await Promise.all([
+    idbGet(store, 'convertedData'),
+    idbGet(store, 'convertedFilename'),
+  ]);
+  if (!data || !filename) return null;
+  return { arrayBuffer: data, filename };
+};
+
+/** Clear converted file data. */
+self.MWU1.clearConvertedFile = async function() {
+  const db = await openDB();
+  const tx = db.transaction(STORE_NAME, 'readwrite');
+  const store = tx.objectStore(STORE_NAME);
+  store.delete('convertedData');
+  store.delete('convertedFilename');
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+};
