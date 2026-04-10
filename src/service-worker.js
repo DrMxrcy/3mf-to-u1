@@ -11,6 +11,28 @@ if (typeof importScripts === 'function') {
   importScripts('lib/file-store.js');
 }
 
+// ---- Serve the converted file as a real extension URL so chrome.downloads
+//      can download it with a correct filename on all platforms (macOS Chrome
+//      ignores the `filename` parameter for blob: and data: URLs). ----
+self.addEventListener('fetch', event => {
+  if (new URL(event.request.url).pathname === '/__pending_download__') {
+    event.respondWith((async () => {
+      try {
+        const file = await self.MWU1.loadConvertedFile();
+        if (!file) return new Response('Not found', { status: 404 });
+        // Clear after reading so stale data is never served twice.
+        self.MWU1.clearConvertedFile().catch(() => {});
+        return new Response(file.data, {
+          status: 200,
+          headers: { 'Content-Type': 'application/octet-stream' },
+        });
+      } catch {
+        return new Response('Internal error', { status: 500 });
+      }
+    })());
+  }
+});
+
 // Track in-flight URLs to prevent Mode A + Mode B double interception
 const IN_FLIGHT_TTL = 30000;
 const IN_FLIGHT_MAX = 50;
@@ -102,9 +124,12 @@ function looks3mf(downloadItem) {
     urlPath.endsWith('.3mf');
 }
 
-/** Check if the download URL is a blob: from our own extension (skip self-generated downloads). */
+/** Check if the download URL is from our own extension (skip self-generated downloads). */
 function isOwnDownload(url) {
-  return url.startsWith('blob:chrome-extension://') || url.startsWith('blob:moz-extension://');
+  if (url.startsWith('blob:chrome-extension://') || url.startsWith('blob:moz-extension://')) return true;
+  // Extension-origin URLs used for the service-worker-driven download flow
+  try { if (new URL(url).origin === new URL(chrome.runtime.getURL('')).origin) return true; } catch {}
+  return false;
 }
 
 function openPopup() {
@@ -170,6 +195,19 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'conversion_complete') {
     self.MWU1.clearFile().catch(() => {});
+    self.MWU1.clearConvertedFile().catch(() => {});
+    return false;
+  }
+
+  if (message.action === 'trigger_download') {
+    // Initiate download from the service worker context so it appears in the
+    // main browser window (not the popup) and Chrome honours the filename on
+    // every platform.  The file bytes are fetched from the extension URL
+    // served by the fetch handler above.
+    const { filename } = message;
+    const downloadUrl = chrome.runtime.getURL('__pending_download__');
+    chrome.downloads.download({ url: downloadUrl, filename, saveAs: false })
+      .catch(err => console.error('[MWU1] Download failed:', err));
     return false;
   }
 

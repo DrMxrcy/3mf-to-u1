@@ -40,43 +40,25 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-/** Detect macOS (desktop, not iOS). */
-function isMacOS() {
-  // navigator.userAgentData is available in Chrome 90+ but not Firefox
-  if (navigator.userAgentData) {
-    return navigator.userAgentData.platform === 'macOS';
-  }
-  return /Mac/.test(navigator.userAgent) && !/iPhone|iPad|iPod/.test(navigator.userAgent);
-}
-
-/** Download a blob as a file, waiting for completion before returning. */
+/**
+ * Download a blob as a file.
+ * Stores the blob in IndexedDB then asks the service worker to initiate the
+ * download via a real chrome-extension:// URL.  This ensures the download
+ * appears in the main browser window (not the popup) and that Chrome honours
+ * the filename on every platform — macOS Chrome ignores the filename parameter
+ * when given a blob: or data: URL.
+ * Falls back to an <a> click for environments without chrome.downloads (e.g.
+ * some Firefox configurations).
+ */
 async function downloadBlob(blob, filename) {
-  const blobUrl = URL.createObjectURL(blob);
-  // On macOS, chrome.downloads.download() with a blob URL ignores the filename
-  // parameter and uses the blob UUID instead. Use the anchor-click approach there.
-  if (chrome.downloads && !isMacOS()) {
-    // Register listener BEFORE starting download to avoid race where
-    // download completes before listener is attached
-    let downloadId = null;
-    await new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        chrome.downloads.onChanged.removeListener(listener);
-        resolve();
-      }, 60000);
-      function listener(delta) {
-        if (downloadId !== null && delta.id !== downloadId) return;
-        if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted') {
-          clearTimeout(timeout);
-          chrome.downloads.onChanged.removeListener(listener);
-          resolve();
-        }
-      }
-      chrome.downloads.onChanged.addListener(listener);
-      chrome.downloads.download({ url: blobUrl, filename, saveAs: false }).then(id => {
-        downloadId = id;
-      });
-    });
+  if (chrome.downloads) {
+    const arrayBuffer = await blob.arrayBuffer();
+    await self.MWU1.storeConvertedFile(arrayBuffer, filename);
+    await chrome.runtime.sendMessage({ action: 'trigger_download', filename })
+      .catch(err => console.error('[MWU1] Failed to send trigger_download message:', err));
   } else {
+    // Fallback for environments without chrome.downloads (e.g. some Firefox configs).
+    const blobUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = blobUrl;
     a.download = filename;
@@ -84,8 +66,8 @@ async function downloadBlob(blob, filename) {
     a.click();
     a.remove();
     await new Promise(r => setTimeout(r, 5000));
+    URL.revokeObjectURL(blobUrl);
   }
-  URL.revokeObjectURL(blobUrl);
 }
 
 // Track whether we loaded an intercepted file (to clean up on close)
