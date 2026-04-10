@@ -89,7 +89,7 @@ self.MWU1.loadConvertedFile = async function() {
     idbGet(store, 'convertedFilename'),
   ]);
   if (!data || !filename) return null;
-  return { arrayBuffer: data, filename };
+  return { data, filename };
 };
 
 /** Clear converted file data. */

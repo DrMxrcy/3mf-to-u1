@@ -54,7 +54,8 @@ async function downloadBlob(blob, filename) {
   if (chrome.downloads) {
     const arrayBuffer = await blob.arrayBuffer();
     await self.MWU1.storeConvertedFile(arrayBuffer, filename);
-    await chrome.runtime.sendMessage({ action: 'trigger_download', filename });
+    await chrome.runtime.sendMessage({ action: 'trigger_download', filename })
+      .catch(err => console.error('[MWU1] Failed to send trigger_download message:', err));
   } else {
     // Fallback for environments without chrome.downloads (e.g. some Firefox configs).
     const blobUrl = URL.createObjectURL(blob);

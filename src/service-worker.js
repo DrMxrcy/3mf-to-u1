@@ -22,7 +22,7 @@ self.addEventListener('fetch', event => {
         if (!file) return new Response('Not found', { status: 404 });
         // Clear after reading so stale data is never served twice.
         self.MWU1.clearConvertedFile().catch(() => {});
-        return new Response(file.arrayBuffer, {
+        return new Response(file.data, {
           status: 200,
           headers: { 'Content-Type': 'application/octet-stream' },
         });
